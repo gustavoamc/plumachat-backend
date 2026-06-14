@@ -101,10 +101,72 @@ export const initIO = (server: any) => {
           return socket.emit("error", { message: "Você não está nesta sala." });
         }
 
+        let finalContent = content.trim();
+
+        // Slash commands are processed server-side
+        if (finalContent.startsWith("/")) {
+          const [command, ...args] = finalContent.slice(1).trim().split(/\s+/);
+          const cmd = command.toLowerCase();
+
+          if (cmd === "r" || cmd === "roll") {
+            const notation = args[0] ?? "";
+            const result = rollDice(notation);
+            if (!result) {
+              return socket.emit("error", {
+                message: "Notação inválida. Ex: /r 2d6 ou /r 2d8+6 tiro",
+              });
+            }
+            const label = args.slice(1).join(" ").trim();
+            const labelPart = label
+              ? ` "${label.charAt(0).toUpperCase()}${label.slice(1)}"`
+              : "";
+            const mod = result.modifier === 0
+              ? ""
+              : result.modifier > 0 ? ` +${result.modifier}` : ` ${result.modifier}`;
+            finalContent = `🎲 Rolou${labelPart}: ${notation}: [${result.rolls.join(", ")}]${mod} = ${result.total}`;
+          } else if (cmd === "sussurro" || cmd === "sussuro" || cmd === "w") {
+            const targetUsername = args[0];
+            const message = args.slice(1).join(" ").trim();
+            if (!targetUsername || !message) {
+              return socket.emit("error", { message: "Uso: /sussurro <usuário> <mensagem>" });
+            }
+
+            const sockets = await io.in(roomId).fetchSockets();
+            const targets = sockets.filter(
+              (s) => s.data?.user?.username?.toLowerCase() === targetUsername.toLowerCase()
+            );
+            if (targets.length === 0) {
+              return socket.emit("error", { message: `"${targetUsername}" não está na sala.` });
+            }
+
+            const base = {
+              _id: `whisper-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              userId: socketUser.id,
+              username: socketUser.username,
+              roomId,
+              timestamp: new Date().toISOString(),
+            };
+            // Private and ephemeral: deliver only to the target(s) and the sender
+            for (const t of targets) {
+              t.emit("receive_message", {
+                ...base,
+                content: `🤫 (sussurro de ${socketUser.username}): ${message}`,
+              });
+            }
+            socket.emit("receive_message", {
+              ...base,
+              content: `🤫 (sussurro para ${targetUsername}): ${message}`,
+            });
+            return;
+          } else {
+            return socket.emit("error", { message: `Comando desconhecido: /${command}` });
+          }
+        }
+
         const newMessage = await MessageModel.create({
           userId: socketUser.id,
           roomId,
-          content: content.trim(),
+          content: finalContent,
         });
 
         io.to(roomId).emit("receive_message", {
@@ -136,6 +198,20 @@ export const initIO = (server: any) => {
   });
 
   return io;
+};
+
+// Parses dice notation like "2d6" or "3d10+2" and rolls it. Returns null if invalid.
+const rollDice = (notation: string) => {
+  const match = notation.match(/^(\d+)d(\d+)([+-]\d+)?$/i);
+  if (!match) return null;
+  const count = parseInt(match[1], 10);
+  const sides = parseInt(match[2], 10);
+  const modifier = match[3] ? parseInt(match[3], 10) : 0;
+  if (count < 1 || count > 100 || sides < 1 || sides > 1000) return null;
+
+  const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
+  const total = rolls.reduce((a, b) => a + b, 0) + modifier;
+  return { rolls, modifier, total };
 };
 
 // Broadcasts the list of currently-connected user ids in a room.
