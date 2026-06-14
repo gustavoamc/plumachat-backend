@@ -71,14 +71,16 @@ export const initIO = (server: any) => {
         }
 
         socket.join(roomId);
+        emitSystemMessage(roomId, socketUser.username, "entrou");
         console.log(`Usuário ${socketUser.username} entrou na sala ${roomId}`);
       } catch (err) {
         socket.emit("error", { message: "Erro ao entrar na sala." });
       }
     });
 
-    // Leave a specific room
+    // Leave a specific room (closed the chat view)
     socket.on("leave_room", (roomId: string) => {
+      emitSystemMessage(roomId, socketUser.username, "desconectou");
       socket.leave(roomId);
       console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
     });
@@ -113,12 +115,34 @@ export const initIO = (server: any) => {
       }
     });
 
+    // Fires before the socket leaves its rooms, so socket.rooms still has them
+    socket.on("disconnecting", () => {
+      for (const roomId of socket.rooms) {
+        if (roomId !== socket.id) {
+          emitSystemMessage(roomId, socketUser.username, "desconectou");
+        }
+      }
+    });
+
     socket.on("disconnect", () => {
       console.log(`Cliente desconectado: ${socket.id} (${socketUser?.username})`);
     });
   });
 
   return io;
+};
+
+// Broadcasts a system notice (join/leave/disconnect/removal) to everyone in a room.
+// Not persisted — these are ephemeral, runtime-only chat notices.
+export const emitSystemMessage = (roomId: string, username: string, action: string) => {
+  if (!io) return;
+  io.to(roomId).emit("system_message", {
+    _id: `sys-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    system: true,
+    username,
+    action,
+    timestamp: new Date().toISOString(),
+  });
 };
 
 export const getIO = (): Server => {

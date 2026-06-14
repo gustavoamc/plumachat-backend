@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { getUserByToken } from "../helpers/getUserByToken";
 import { RoomModel } from "../models/room.model";
+import { UserModel } from "../models/user.model";
+import { getIO, emitSystemMessage } from "../sockets/setupSocket";
 
 export const createRoom = async (req: Request, res: Response) => {
   const user = await getUserByToken(req);
@@ -64,6 +66,15 @@ export const getRoom = async (req: Request, res: Response) => {
       .populate("participants", "username");
     if (!room) {
       return res.status(404).json({ message: "Sala não encontrada." });
+    }
+
+    const isParticipant = room.participants.some(
+      (participant: any) => (participant._id ?? participant).toString() === user.id
+    );
+    if (!isParticipant) {
+      return res
+        .status(403)
+        .json({ message: "Você não tem permissão para ver esta sala." });
     }
 
     return res.status(200).json(room);
@@ -203,6 +214,8 @@ export const leaveRoom = async (req: Request, res: Response) => {
     );
     await room.save();
 
+    emitSystemMessage(id, user.username, "saiu");
+
     return res.status(200).json({ message: "Você saiu da sala:", room });
   } catch (error) {
     return res.status(500).json({ message: "Erro ao sair da sala." });
@@ -228,23 +241,36 @@ export const removeParticipant = async (req: Request, res: Response) => {
 
   try {
     const room = await RoomModel.findById(roomId);
-    
-    if (user.id != room!.owner.id) {
+    if (!room) {
+      return res.status(404).json({ message: "Sala não encontrada." });
+    }
+
+    if (room.owner.toString() !== user.id) {
       return res
         .status(403)
         .json({ message: "Apenas o dono da sala pode remover participantes." });
     }
-    
-    if (room!.owner.id === userId) {
+
+    if (room.owner.toString() === userId) {
       return res
         .status(400)
         .json({ message: "Dono da sala não pode ser removido." });
     }
 
-    room!.participants = room!.participants.filter(
-      (participant) => participant.id !== userId
+    room.participants = room.participants.filter(
+      (participant) => participant.toString() !== userId
     );
-    await room!.save();
+    await room.save();
+
+    // Notify clients in the room so the removed user is kicked out live
+    try {
+      getIO().to(roomId).emit("participant_removed", { roomId, userId });
+      const removedUser = await UserModel.findById(userId);
+      emitSystemMessage(roomId, removedUser?.username ?? "Usuário", "removido");
+    } catch {
+      // Socket layer unavailable; removal still succeeded
+    }
+
     return res
       .status(200)
       .json({ message: "Participante removido com sucesso.", id: userId });
