@@ -38,11 +38,14 @@ export const initIO = (server: any) => {
         return next(new Error("Usuário banido"));
       }
 
-      (socket as any).user = {
+      const socketUser: SocketUser = {
         id: user.id,
         role: user.role,
         username: user.username,
-      } as SocketUser;
+      };
+      (socket as any).user = socketUser;
+      // Also on socket.data so fetchSockets() can read it for presence
+      socket.data.user = socketUser;
 
       next();
     } catch (err) {
@@ -72,6 +75,7 @@ export const initIO = (server: any) => {
 
         socket.join(roomId);
         emitSystemMessage(roomId, socketUser.username, "entrou");
+        await emitPresence(roomId);
         console.log(`Usuário ${socketUser.username} entrou na sala ${roomId}`);
       } catch (err) {
         socket.emit("error", { message: "Erro ao entrar na sala." });
@@ -79,9 +83,10 @@ export const initIO = (server: any) => {
     });
 
     // Leave a specific room (closed the chat view)
-    socket.on("leave_room", (roomId: string) => {
+    socket.on("leave_room", async (roomId: string) => {
       emitSystemMessage(roomId, socketUser.username, "desconectou");
       socket.leave(roomId);
+      await emitPresence(roomId);
       console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
     });
 
@@ -116,11 +121,12 @@ export const initIO = (server: any) => {
     });
 
     // Fires before the socket leaves its rooms, so socket.rooms still has them
-    socket.on("disconnecting", () => {
-      for (const roomId of socket.rooms) {
-        if (roomId !== socket.id) {
-          emitSystemMessage(roomId, socketUser.username, "desconectou");
-        }
+    socket.on("disconnecting", async () => {
+      const rooms = [...socket.rooms].filter((roomId) => roomId !== socket.id);
+      for (const roomId of rooms) {
+        emitSystemMessage(roomId, socketUser.username, "desconectou");
+        // Recompute presence excluding this disconnecting socket
+        await emitPresence(roomId, socket.id);
       }
     });
 
@@ -132,17 +138,41 @@ export const initIO = (server: any) => {
   return io;
 };
 
-// Broadcasts a system notice (join/leave/disconnect/removal) to everyone in a room.
-// Not persisted — these are ephemeral, runtime-only chat notices.
-export const emitSystemMessage = (roomId: string, username: string, action: string) => {
+// Broadcasts the list of currently-connected user ids in a room.
+// `excludeSocketId` omits a socket that is mid-disconnect but still in the room.
+const emitPresence = async (roomId: string, excludeSocketId?: string) => {
   if (!io) return;
-  io.to(roomId).emit("system_message", {
-    _id: `sys-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    system: true,
-    username,
-    action,
-    timestamp: new Date().toISOString(),
-  });
+  const sockets = await io.in(roomId).fetchSockets();
+  const onlineUserIds = [
+    ...new Set(
+      sockets
+        .filter((s) => s.id !== excludeSocketId)
+        .map((s) => s.data?.user?.id)
+        .filter(Boolean)
+    ),
+  ];
+  io.to(roomId).emit("presence", { roomId, onlineUserIds });
+};
+
+// Persists and broadcasts a system notice (join/leave/disconnect/removal) to a room.
+// Stored as a message with no userId (authored by "system") and system: true.
+export const emitSystemMessage = async (roomId: string, username: string, action: string) => {
+  if (!io) return;
+  try {
+    const newMessage = await MessageModel.create({
+      roomId,
+      content: `${username} ${action}`,
+      system: true,
+    });
+    io.to(roomId).emit("system_message", {
+      _id: newMessage._id,
+      system: true,
+      content: newMessage.content,
+      timestamp: newMessage.get("timestamp"),
+    });
+  } catch (err) {
+    console.error("Erro ao salvar mensagem de sistema:", err);
+  }
 };
 
 export const getIO = (): Server => {
