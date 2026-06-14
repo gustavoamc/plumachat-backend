@@ -9,6 +9,9 @@ const RoomSchema = new Schema<RoomDocument>(
     isPrivate: { type: Boolean, required: true, default: true },
     owner: { type: Schema.Types.ObjectId, ref: "User", required: true },
     participants: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    drawingOwnerOnly: { type: Boolean, required: true, default: false },
+    canvasWidth: { type: Number, required: true, default: 1280 },
+    canvasHeight: { type: Number, required: true, default: 720 },
   },
   { timestamps: true }
 );

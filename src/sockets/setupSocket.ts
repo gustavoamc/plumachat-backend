@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import { UserModel } from "../models/user.model";
 import { RoomModel } from "../models/room.model";
 import { MessageModel } from "../models/message.model";
+import { registerDrawingHandlers, sendDrawState } from "./drawing";
 
 let io: Server;
 
@@ -58,6 +59,9 @@ export const initIO = (server: any) => {
     const socketUser = (socket as any).user as SocketUser;
     console.log(`Novo cliente conectado: ${socket.id} (${socketUser.username})`);
 
+    // Shared-canvas (draw_*) events live in their own module.
+    registerDrawingHandlers(socket);
+
     // Join a specific room
     socket.on("join_room", async (roomId: string) => {
       try {
@@ -76,6 +80,8 @@ export const initIO = (server: any) => {
         socket.join(roomId);
         emitSystemMessage(roomId, socketUser.username, "entrou");
         await emitPresence(roomId);
+        // Send the current canvas snapshot to the joining client.
+        await sendDrawState(socket, roomId);
         console.log(`Usuário ${socketUser.username} entrou na sala ${roomId}`);
       } catch (err) {
         socket.emit("error", { message: "Erro ao entrar na sala." });
