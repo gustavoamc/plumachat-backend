@@ -149,7 +149,7 @@ export const joinRoom = async (req: Request, res: Response) => {
     return res.status(404).json({ message: "Usuário não encontrado!" });
   }
 
-  const { id } = req.body;
+  const { id } = req.params;
 
   if (!id) {
     return res.status(400).json({ message: "ID da sala é obrigatório." });
@@ -182,7 +182,7 @@ export const leaveRoom = async (req: Request, res: Response) => {
     return res.status(404).json({ message: "Usuário não encontrado!" });
   }
 
-  const { id } = req.body;
+  const { id } = req.params;
 
   if (!id) {
     return res.status(400).json({ message: "ID da sala é obrigatório." });
@@ -217,7 +217,8 @@ export const removeParticipant = async (req: Request, res: Response) => {
     return res.status(404).json({ message: "Usuário não encontrado!" });
   }
 
-  const { roomId, userId } = req.body;
+  const { id: roomId } = req.params;
+  const { userId } = req.body;
 
   if (!roomId || !userId) {
     return res
