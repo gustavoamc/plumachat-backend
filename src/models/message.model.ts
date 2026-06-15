@@ -5,9 +5,10 @@ export interface MessageDocument extends Omit<Message, "_id" | "timestamp">, Doc
 
 const MessageSchema = new Schema<MessageDocument>(
   {
-    userId:   { type: Schema.Types.ObjectId, ref: "User", required: true },
-    roomId:   { type: String, required: true },
+    userId:   { type: Schema.Types.ObjectId, ref: "User", required: false },
+    roomId:   { type: Schema.Types.ObjectId, ref: "Room", required: true },
     content:  { type: String, required: true },
+    system:   { type: Boolean, default: false },
   },
   { timestamps: { createdAt: "timestamp" } }
 );
