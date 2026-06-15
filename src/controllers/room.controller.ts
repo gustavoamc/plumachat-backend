@@ -2,7 +2,9 @@ import { Request, Response } from "express";
 import { getUserByToken } from "../helpers/getUserByToken";
 import { RoomModel } from "../models/room.model";
 import { UserModel } from "../models/user.model";
+import { MessageModel } from "../models/message.model";
 import { getIO, emitSystemMessage } from "../sockets/setupSocket";
+import { deleteRoomDrawing } from "../sockets/drawing";
 
 export const createRoom = async (req: Request, res: Response) => {
   const user = await getUserByToken(req);
@@ -148,6 +150,12 @@ export const deleteRoom = async (req: Request, res: Response) => {
     }
 
     await room.deleteOne();
+    // Cascade: drop the room's chat history and shared canvas (DB + in-memory)
+    // so deleting a room doesn't leave orphaned data behind.
+    await Promise.all([
+      MessageModel.deleteMany({ roomId: id }),
+      deleteRoomDrawing(id),
+    ]);
     return res.status(200).json({ message: "Sala deletada com sucesso!" });
   } catch (error) {
     return res.status(500).json({ message: "Erro ao deletar sala." });

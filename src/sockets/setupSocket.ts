@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import { UserModel } from "../models/user.model";
 import { RoomModel } from "../models/room.model";
 import { MessageModel } from "../models/message.model";
-import { registerDrawingHandlers, sendDrawState } from "./drawing";
+import { registerDrawingHandlers, sendDrawState, evictRoomDrawing } from "./drawing";
 
 let io: Server;
 
@@ -92,7 +92,8 @@ export const initIO = (server: any) => {
     socket.on("leave_room", async (roomId: string) => {
       emitSystemMessage(roomId, socketUser.username, "desconectou");
       socket.leave(roomId);
-      await emitPresence(roomId);
+      const remaining = await emitPresence(roomId);
+      await evictDrawingIfEmpty(roomId, remaining);
       console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
     });
 
@@ -194,7 +195,8 @@ export const initIO = (server: any) => {
       for (const roomId of rooms) {
         emitSystemMessage(roomId, socketUser.username, "desconectou");
         // Recompute presence excluding this disconnecting socket
-        await emitPresence(roomId, socket.id);
+        const remaining = await emitPresence(roomId, socket.id);
+        await evictDrawingIfEmpty(roomId, remaining);
       }
     });
 
@@ -220,20 +222,26 @@ const rollDice = (notation: string) => {
   return { rolls, modifier, total };
 };
 
-// Broadcasts the list of currently-connected user ids in a room.
-// `excludeSocketId` omits a socket that is mid-disconnect but still in the room.
-const emitPresence = async (roomId: string, excludeSocketId?: string) => {
-  if (!io) return;
-  const sockets = await io.in(roomId).fetchSockets();
+// Broadcasts the list of currently-connected user ids in a room and returns the
+// number of sockets still in it. `excludeSocketId` omits a socket that is
+// mid-disconnect but still in the room.
+const emitPresence = async (roomId: string, excludeSocketId?: string): Promise<number> => {
+  if (!io) return 0;
+  const sockets = (await io.in(roomId).fetchSockets()).filter(
+    (s) => s.id !== excludeSocketId
+  );
   const onlineUserIds = [
-    ...new Set(
-      sockets
-        .filter((s) => s.id !== excludeSocketId)
-        .map((s) => s.data?.user?.id)
-        .filter(Boolean)
-    ),
+    ...new Set(sockets.map((s) => s.data?.user?.id).filter(Boolean)),
   ];
   io.to(roomId).emit("presence", { roomId, onlineUserIds });
+  return sockets.length;
+};
+
+// Frees a room's in-memory canvas state once nobody is left in it.
+const evictDrawingIfEmpty = async (roomId: string, remaining: number) => {
+  if (remaining === 0) {
+    await evictRoomDrawing(roomId);
+  }
 };
 
 // Persists and broadcasts a system notice (join/leave/disconnect/removal) to a room.

@@ -112,6 +112,42 @@ function canDraw(entry: RoomDrawing, userId: string): boolean {
   return !entry.drawingOwnerOnly || entry.ownerId === userId;
 }
 
+// Drops a room's in-memory canvas state (and any pending save timer) so the
+// `rooms` map doesn't grow unbounded. By default it flushes the current snapshot
+// to the DB first, so edits made within the debounce window aren't lost when the
+// last member leaves. Pass `persist = false` when the room is being deleted.
+export async function evictRoomDrawing(roomId: string, persist = true) {
+  const timer = saveTimers.get(roomId);
+  if (timer) {
+    clearTimeout(timer);
+    saveTimers.delete(roomId);
+  }
+  const entry = rooms.get(roomId);
+  rooms.delete(roomId);
+
+  if (persist && entry) {
+    try {
+      await DrawingModel.findOneAndUpdate(
+        { roomId },
+        { shapes: [...entry.shapes.values()] },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error("Erro ao salvar desenho:", err);
+    }
+  }
+}
+
+// Removes a room's drawing entirely (in-memory + persisted). Used on room delete.
+export async function deleteRoomDrawing(roomId: string) {
+  await evictRoomDrawing(roomId, false);
+  try {
+    await DrawingModel.deleteOne({ roomId });
+  } catch (err) {
+    console.error("Erro ao remover desenho:", err);
+  }
+}
+
 // Sends the full board state to a single socket (on join / explicit request).
 export async function sendDrawState(socket: Socket, roomId: string) {
   if (!socket.rooms.has(roomId)) return;
