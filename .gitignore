@@ -44,3 +44,6 @@ logs/
 *.pem
 .vercel
 /dev_docs
+
+# User-uploaded board images
+/uploads

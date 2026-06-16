@@ -1,7 +1,9 @@
 import { Socket } from "socket.io";
+import { promises as fs } from "fs";
 import { RoomModel } from "../models/room.model";
 import { DrawingModel } from "../models/drawing.model";
 import { DrawShape } from "../../shared/types/drawing";
+import { roomUploadDir } from "../config/uploads";
 
 // In-memory authoritative state for each active room's canvas. The server is the
 // single source of truth: clients send minimal mutations, we validate/apply them
@@ -19,6 +21,8 @@ const saveTimers = new Map<string, NodeJS.Timeout>();
 
 const MAX_SHAPES = 2000; // hard cap per room to bound memory/payload
 const MAX_POINTS = 2000; // flat numbers (i.e. 1000 x/y pairs) per stroke
+const MAX_TEXT_LEN = 5000; // characters per text shape
+const MAX_COORD = 20000; // bound for positions / sizes
 const SAVE_DEBOUNCE_MS = 1500;
 
 const MIN_CANVAS = 320;
@@ -28,6 +32,34 @@ const DEFAULT_CANVAS_H = 720;
 
 const clampCanvas = (n: number) =>
   Math.min(Math.max(Math.round(n), MIN_CANVAS), MAX_CANVAS);
+
+// Generic numeric clamp with a fallback for non-finite input.
+const clampNum = (n: any, min: number, max: number, def: number) =>
+  Number.isFinite(n) ? Math.min(Math.max(Number(n), min), max) : def;
+
+const clampCoord = (n: any) => clampNum(n, -MAX_COORD, MAX_COORD, 0);
+
+// Colours are passed straight to Konva; we only bound the length (CSS colour
+// strings are short) to keep payloads small and reject junk.
+const clampColor = (s: any, def: string) =>
+  typeof s === "string" && s.length > 0 && s.length <= 32 ? s : def;
+
+// Optional fill: a colour string, or undefined for "no fill" (transparent).
+const sanitizeFill = (s: any): string | undefined =>
+  typeof s === "string" && s.length > 0 && s.length <= 32 ? s : undefined;
+
+const sanitizePoints = (raw: any): number[] =>
+  Array.isArray(raw)
+    ? raw.slice(0, MAX_POINTS).map((n: any) => (Number.isFinite(n) ? Number(n) : 0))
+    : [];
+
+// An image `src` must be a path we issued (`/uploads/<roomId>/<file>`). Rejecting
+// arbitrary URLs / data URLs prevents SSRF-ish abuse and keeps the snapshot lean.
+const sanitizeSrc = (raw: any): string | null => {
+  if (typeof raw !== "string" || raw.length > 300) return null;
+  if (raw.includes("..")) return null;
+  return /^\/uploads\/[A-Za-z0-9_\-/.]+$/.test(raw) ? raw : null;
+};
 
 interface SocketUser {
   id: string;
@@ -61,30 +93,92 @@ async function loadRoom(roomId: string): Promise<RoomDrawing | null> {
   return entry;
 }
 
-// Coerces untrusted client input into a safe shape, or null if unusable.
+// Coerces untrusted client input into a safe shape, or null if unusable. Each
+// shape `type` validates/clamps its own fields. A shape with no `type` is treated
+// as a freehand `'line'` for backwards compatibility with the original board.
 function sanitizeShape(raw: any): DrawShape | null {
   if (!raw || typeof raw.id !== "string" || raw.id.length > 100) return null;
 
-  const points = Array.isArray(raw.points)
-    ? raw.points
-        .slice(0, MAX_POINTS)
-        .map((n: any) => (Number.isFinite(n) ? Number(n) : 0))
-    : [];
-  if (points.length < 2) return null;
-
-  const stroke = typeof raw.stroke === "string" ? raw.stroke.slice(0, 32) : "#000000";
-  const strokeWidth = Number.isFinite(raw.strokeWidth)
-    ? Math.min(Math.max(Number(raw.strokeWidth), 1), 100)
-    : 3;
-
-  return {
+  const type = typeof raw.type === "string" ? raw.type : "line";
+  const base = {
     id: raw.id,
-    points,
-    x: Number.isFinite(raw.x) ? Number(raw.x) : 0,
-    y: Number.isFinite(raw.y) ? Number(raw.y) : 0,
-    stroke,
-    strokeWidth,
+    x: clampCoord(raw.x),
+    y: clampCoord(raw.y),
+    rotation: clampNum(raw.rotation, -360, 360, 0),
   };
+
+  switch (type) {
+    case "line": {
+      const points = sanitizePoints(raw.points);
+      if (points.length < 2) return null;
+      return {
+        ...base,
+        type: "line",
+        points,
+        stroke: clampColor(raw.stroke, "#000000"),
+        strokeWidth: clampNum(raw.strokeWidth, 1, 100, 3),
+      };
+    }
+    case "rect": {
+      return {
+        ...base,
+        type: "rect",
+        width: clampNum(raw.width, 1, MAX_COORD, 1),
+        height: clampNum(raw.height, 1, MAX_COORD, 1),
+        stroke: clampColor(raw.stroke, "#000000"),
+        strokeWidth: clampNum(raw.strokeWidth, 0, 100, 3),
+        fill: sanitizeFill(raw.fill),
+      };
+    }
+    case "ellipse": {
+      return {
+        ...base,
+        type: "ellipse",
+        radiusX: clampNum(raw.radiusX, 1, MAX_COORD, 1),
+        radiusY: clampNum(raw.radiusY, 1, MAX_COORD, 1),
+        stroke: clampColor(raw.stroke, "#000000"),
+        strokeWidth: clampNum(raw.strokeWidth, 0, 100, 3),
+        fill: sanitizeFill(raw.fill),
+      };
+    }
+    case "arrow": {
+      const points = sanitizePoints(raw.points);
+      if (points.length < 4) return null;
+      return {
+        ...base,
+        type: "arrow",
+        points: points.slice(0, 4),
+        stroke: clampColor(raw.stroke, "#000000"),
+        strokeWidth: clampNum(raw.strokeWidth, 1, 100, 3),
+        arrow: raw.arrow !== false,
+      };
+    }
+    case "text": {
+      const text = typeof raw.text === "string" ? raw.text.slice(0, MAX_TEXT_LEN) : "";
+      if (!text) return null;
+      return {
+        ...base,
+        type: "text",
+        text,
+        fontSize: clampNum(raw.fontSize, 6, 400, 24),
+        fill: clampColor(raw.fill, "#000000"),
+        width: Number.isFinite(raw.width) ? clampNum(raw.width, 1, MAX_COORD, 200) : undefined,
+      };
+    }
+    case "image": {
+      const src = sanitizeSrc(raw.src);
+      if (!src) return null;
+      return {
+        ...base,
+        type: "image",
+        src,
+        width: clampNum(raw.width, 1, MAX_COORD, 100),
+        height: clampNum(raw.height, 1, MAX_COORD, 100),
+      };
+    }
+    default:
+      return null;
+  }
 }
 
 // Persists the room's current snapshot, debounced so a burst of edits (drags,
@@ -138,13 +232,19 @@ export async function evictRoomDrawing(roomId: string, persist = true) {
   }
 }
 
-// Removes a room's drawing entirely (in-memory + persisted). Used on room delete.
+// Removes a room's drawing entirely (in-memory + persisted snapshot + uploaded
+// images on disk). Used on room delete so nothing is orphaned.
 export async function deleteRoomDrawing(roomId: string) {
   await evictRoomDrawing(roomId, false);
   try {
     await DrawingModel.deleteOne({ roomId });
   } catch (err) {
     console.error("Erro ao remover desenho:", err);
+  }
+  try {
+    await fs.rm(roomUploadDir(roomId), { recursive: true, force: true });
+  } catch (err) {
+    console.error("Erro ao remover imagens da sala:", err);
   }
 }
 
@@ -206,6 +306,27 @@ export function registerDrawingHandlers(socket: Socket) {
       scheduleSave(roomId);
     }
   );
+
+  // Partial update of an existing shape: resize, rotate, restyle, or edit text.
+  // The client sends the full (small) shape; we re-sanitize, force its original
+  // `type` (no type changes via update) and rebroadcast. Used at transform-end /
+  // text-commit, so it's low-frequency unlike the throttled drag stream.
+  socket.on("draw_update", async ({ roomId, shape }: { roomId: string; shape: any }) => {
+    if (!socket.rooms.has(roomId)) return;
+    const entry = await loadRoom(roomId);
+    if (!entry || !canDraw(entry, user.id)) return;
+    if (!shape || typeof shape.id !== "string") return;
+
+    const existing = entry.shapes.get(shape.id);
+    if (!existing) return; // update only applies to shapes that already exist
+
+    const merged = sanitizeShape({ ...existing, ...shape, type: existing.type });
+    if (!merged) return;
+
+    entry.shapes.set(merged.id, merged);
+    socket.to(roomId).emit("draw_update", { roomId, shape: merged });
+    scheduleSave(roomId);
+  });
 
   socket.on("draw_remove", async ({ roomId, id }: { roomId: string; id: string }) => {
     if (!socket.rooms.has(roomId)) return;

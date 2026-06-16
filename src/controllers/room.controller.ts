@@ -230,6 +230,18 @@ export const leaveRoom = async (req: Request, res: Response) => {
   }
 };
 
+// Receives a single board image (validated/stored by the upload middleware) and
+// returns the path the client should store in an 'image' shape. The path is
+// relative (`/uploads/<roomId>/<file>`); the client resolves it against the API
+// base URL. The room's images are removed when the room is deleted.
+export const uploadRoomImage = (req: Request, res: Response) => {
+  if (!req.file) {
+    return res.status(400).json({ message: "Nenhuma imagem válida enviada." });
+  }
+  const url = `/uploads/${req.params.id}/${req.file.filename}`;
+  return res.status(201).json({ url });
+};
+
 //Removes a participant from a room. Only the room owner can do this.
 export const removeParticipant = async (req: Request, res: Response) => {
   const user = await getUserByToken(req);
