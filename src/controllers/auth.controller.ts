@@ -28,7 +28,7 @@ export const registerUser = async (req: Request, res: Response) => {
     if (password.length < 8)
       return res
         .status(400)
-        .json({ message: "A senha deve ter no mínimo 6 caracteres." });
+        .json({ message: "A senha deve ter no mínimo 8 caracteres." });
 
     // Atomically claim the invite key: the filter + update run as a single
     // operation, so two concurrent requests with the same code cannot both
