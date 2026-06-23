@@ -38,6 +38,14 @@ const DEFAULT_DRAW_TIME_MS = 80_000;
 const REVEAL_MS = 5_000;
 const MIN_PLAYERS = 2;
 
+// Scoring. A correct guess is worth a flat BASE_POINTS plus a speed bonus that
+// scales from SPEED_BONUS_MAX (guessed instantly) down to 0 (guessed at the
+// buzzer). The drawer earns DRAWER_POINTS_PER_GUESSER for each player who gets
+// it, so drawing well is rewarded.
+const BASE_POINTS = 50;
+const SPEED_BONUS_MAX = 100;
+const DRAWER_POINTS_PER_GUESSER = 25;
+
 // ---- helpers ---------------------------------------------------------------
 
 function shuffle<T>(arr: T[]): T[] {
@@ -317,8 +325,21 @@ export async function handleChatMessage(
 
   // First correct guess from this player.
   game.guessedThisRound.add(userId);
-  // Phase 4 will award points here based on remaining time.
-  getIO().to(roomId).emit("gartic_correct", { roomId, userId, username });
+
+  // Award the guesser: flat base + a speed bonus proportional to time left.
+  const remaining = Math.max(0, (game.deadline ?? Date.now()) - Date.now());
+  const speedBonus = Math.round((SPEED_BONUS_MAX * remaining) / game.drawTimeMs);
+  const points = BASE_POINTS + speedBonus;
+  const guesser = game.players.get(userId);
+  if (guesser) guesser.score += points;
+
+  // Reward the drawer for each player who guesses their drawing.
+  const drawer = game.currentDrawerId
+    ? game.players.get(game.currentDrawerId)
+    : undefined;
+  if (drawer) drawer.score += DRAWER_POINTS_PER_GUESSER;
+
+  getIO().to(roomId).emit("gartic_correct", { roomId, userId, username, points });
   await emitGameState(roomId);
 
   // End the round early once every non-drawer player has guessed.
