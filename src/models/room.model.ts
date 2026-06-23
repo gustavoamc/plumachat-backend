@@ -7,6 +7,12 @@ const RoomSchema = new Schema<RoomDocument>(
   {
     name: { type: String, required: true, unique: true },
     isPrivate: { type: Boolean, required: true, default: true },
+    roomType: {
+      type: String,
+      enum: ["default", "draw_guess"],
+      default: "default",
+      required: true,
+    },
     owner: { type: Schema.Types.ObjectId, ref: "User", required: true },
     participants: [{ type: Schema.Types.ObjectId, ref: "User" }],
     drawingOwnerOnly: { type: Boolean, required: true, default: false },

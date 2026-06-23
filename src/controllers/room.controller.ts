@@ -5,6 +5,11 @@ import { UserModel } from "../models/user.model";
 import { MessageModel } from "../models/message.model";
 import { getIO, emitSystemMessage } from "../sockets/setupSocket";
 import { deleteRoomDrawing } from "../sockets/drawing";
+import { RoomType } from "../../shared/types/room";
+
+// Room types a client is allowed to create. Kept in sync with the model enum
+// and the shared RoomType union.
+const ROOM_TYPES: RoomType[] = ["default", "draw_guess"];
 
 export const createRoom = async (req: Request, res: Response) => {
   const user = await getUserByToken(req);
@@ -12,10 +17,17 @@ export const createRoom = async (req: Request, res: Response) => {
     return res.status(404).json({ message: "Usuário não encontrado!" });
   }
 
-  const { name, isPrivate } = req.body;
+  const { name, isPrivate, roomType } = req.body;
 
   if (!name || typeof name !== "string" || name.trim() === "") {
     return res.status(400).json({ message: "Nome da sala é obrigatório." });
+  }
+
+  // roomType is optional; default to a classic chat-with-canvas room. Reject
+  // anything not in the known set so the schema enum is never the first guard.
+  const type: RoomType = roomType ?? "default";
+  if (!ROOM_TYPES.includes(type)) {
+    return res.status(400).json({ message: "Tipo de sala inválido." });
   }
 
   try {
@@ -23,6 +35,7 @@ export const createRoom = async (req: Request, res: Response) => {
       name: name,
       owner: user._id,
       isPrivate: isPrivate,
+      roomType: type,
       participants: [user._id],
     });
 
