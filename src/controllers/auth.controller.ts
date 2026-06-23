@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { UserModel } from "../models/user.model";
+import { InviteKeyModel } from "../models/inviteKey.model";
 import { createUserToken } from "../helpers/createUserToken";
 
 /**
@@ -13,9 +14,9 @@ import { createUserToken } from "../helpers/createUserToken";
  */
 export const registerUser = async (req: Request, res: Response) => {
   try {
-    const { username, email, password } = req.body;
+    const { username, email, password, inviteCode } = req.body;
 
-    if (!username || !email || !password)
+    if (!username || !email || !password || !inviteCode)
       return res
         .status(400)
         .json({ message: "Todos os campos são obrigatórios." });
@@ -29,12 +30,43 @@ export const registerUser = async (req: Request, res: Response) => {
         .status(400)
         .json({ message: "A senha deve ter no mínimo 6 caracteres." });
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await UserModel.create({
-      username,
-      email,
-      password: hashedPassword,
-    });
+    // Atomically claim the invite key: the filter + update run as a single
+    // operation, so two concurrent requests with the same code cannot both
+    // succeed. A null result means the code is invalid, already used or expired.
+    const key = await InviteKeyModel.findOneAndUpdate(
+      { code: inviteCode, used: false, expiresAt: { $gt: new Date() } },
+      { $set: { used: true, usedAt: new Date() } },
+      { new: true }
+    );
+    if (!key) {
+      return res
+        .status(400)
+        .json({ message: "Chave de convite inválida ou já utilizada." });
+    }
+
+    let user;
+    try {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      user = await UserModel.create({
+        username,
+        email,
+        password: hashedPassword,
+      });
+    } catch (createErr) {
+      // The key was burned before the account was created; release it so it
+      // can be reused. Small window, easy to close.
+      await InviteKeyModel.updateOne(
+        { _id: key._id },
+        { $set: { used: false, usedAt: null } }
+      );
+      throw createErr;
+    }
+
+    // Record who redeemed the key now that the account exists.
+    await InviteKeyModel.updateOne(
+      { _id: key._id },
+      { $set: { usedBy: user.id } }
+    );
 
     const token = await createUserToken(user.id, user.role);
 

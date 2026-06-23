@@ -5,6 +5,7 @@ import AuthRoutes from "./routes/auth.routes";
 import UserRoutes from "./routes/user.routes";
 import AdminRoutes from "./routes/admin.routes";
 import RoomRoutes from "./routes/room.routes";
+import InviteRoutes from "./routes/inviteKey.routes";
 import { UPLOAD_ROOT } from "./config/uploads";
 
 const app = express();
@@ -20,6 +21,7 @@ app.use("/", AuthRoutes);
 app.use("/user", UserRoutes);
 app.use("/admin", AdminRoutes);
 app.use("/room", RoomRoutes);
+app.use("/invite", InviteRoutes);
 
 // Rotas de exemplo
 app.get("/ping", (_, res) => res.send("pong"));
