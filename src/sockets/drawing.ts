@@ -14,6 +14,10 @@ interface RoomDrawing {
   drawingOwnerOnly: boolean;
   canvasWidth: number;
   canvasHeight: number;
+  // When a draw_guess game is mid-round, only this user may draw. null/undefined
+  // means no game constraint is active and normal owner rules apply. Set by the
+  // gartic game module (see setGameDrawer).
+  gameDrawerId?: string | null;
 }
 
 const rooms = new Map<string, RoomDrawing>();
@@ -203,7 +207,28 @@ function scheduleSave(roomId: string) {
 }
 
 function canDraw(entry: RoomDrawing, userId: string): boolean {
+  // An active game's drawer constraint takes precedence over the room's
+  // owner-only toggle: during a round, only the current drawer may draw.
+  if (entry.gameDrawerId != null) return entry.gameDrawerId === userId;
   return !entry.drawingOwnerOnly || entry.ownerId === userId;
+}
+
+// Sets (or clears, with null) the single user allowed to draw while a draw_guess
+// round is in progress. Called by the gartic game module at round start/end.
+export async function setGameDrawer(roomId: string, drawerId: string | null) {
+  const entry = await loadRoom(roomId);
+  if (!entry) return;
+  entry.gameDrawerId = drawerId;
+}
+
+// Clears the room's canvas in-memory and schedules a save, without broadcasting.
+// The gartic module owns the broadcast (it emits draw_clear alongside the new
+// round state), so this just resets the authoritative shapes between rounds.
+export async function clearRoomDrawingShapes(roomId: string) {
+  const entry = await loadRoom(roomId);
+  if (!entry) return;
+  entry.shapes.clear();
+  scheduleSave(roomId);
 }
 
 // Drops a room's in-memory canvas state (and any pending save timer) so the

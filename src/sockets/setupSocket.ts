@@ -4,6 +4,11 @@ import { UserModel } from "../models/user.model";
 import { RoomModel } from "../models/room.model";
 import { MessageModel } from "../models/message.model";
 import { registerDrawingHandlers, sendDrawState, evictRoomDrawing } from "./drawing";
+import {
+  registerGarticHandlers,
+  handlePlayerLeft,
+  evictGarticGame,
+} from "./garticGame";
 
 let io: Server;
 
@@ -62,6 +67,9 @@ export const initIO = (server: any) => {
     // Shared-canvas (draw_*) events live in their own module.
     registerDrawingHandlers(socket);
 
+    // Draw-and-guess game (gartic_*) events live in their own module.
+    registerGarticHandlers(socket);
+
     // Join a specific room
     socket.on("join_room", async (roomId: string) => {
       try {
@@ -92,6 +100,7 @@ export const initIO = (server: any) => {
     socket.on("leave_room", async (roomId: string) => {
       emitSystemMessage(roomId, socketUser.username, "desconectou");
       socket.leave(roomId);
+      await handlePlayerLeft(roomId, socketUser.id);
       const remaining = await emitPresence(roomId);
       await evictDrawingIfEmpty(roomId, remaining);
       console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
@@ -194,6 +203,7 @@ export const initIO = (server: any) => {
       const rooms = [...socket.rooms].filter((roomId) => roomId !== socket.id);
       for (const roomId of rooms) {
         emitSystemMessage(roomId, socketUser.username, "desconectou");
+        await handlePlayerLeft(roomId, socketUser.id);
         // Recompute presence excluding this disconnecting socket
         const remaining = await emitPresence(roomId, socket.id);
         await evictDrawingIfEmpty(roomId, remaining);
@@ -241,6 +251,7 @@ const emitPresence = async (roomId: string, excludeSocketId?: string): Promise<n
 const evictDrawingIfEmpty = async (roomId: string, remaining: number) => {
   if (remaining === 0) {
     await evictRoomDrawing(roomId);
+    await evictGarticGame(roomId);
   }
 };
 

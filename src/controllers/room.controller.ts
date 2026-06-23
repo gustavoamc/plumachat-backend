@@ -5,6 +5,7 @@ import { UserModel } from "../models/user.model";
 import { MessageModel } from "../models/message.model";
 import { getIO, emitSystemMessage } from "../sockets/setupSocket";
 import { deleteRoomDrawing } from "../sockets/drawing";
+import { evictGarticGame } from "../sockets/garticGame";
 import { RoomType } from "../../shared/types/room";
 
 // Room types a client is allowed to create. Kept in sync with the model enum
@@ -168,6 +169,7 @@ export const deleteRoom = async (req: Request, res: Response) => {
     await Promise.all([
       MessageModel.deleteMany({ roomId: id }),
       deleteRoomDrawing(id),
+      evictGarticGame(id),
     ]);
     return res.status(200).json({ message: "Sala deletada com sucesso!" });
   } catch (error) {
