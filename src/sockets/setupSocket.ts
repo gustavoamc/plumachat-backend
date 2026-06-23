@@ -8,6 +8,7 @@ import {
   registerGarticHandlers,
   handlePlayerLeft,
   evictGarticGame,
+  handleChatMessage,
 } from "./garticGame";
 
 let io: Server;
@@ -176,6 +177,24 @@ export const initIO = (server: any) => {
             return;
           } else {
             return socket.emit("error", { message: `Comando desconhecido: /${command}` });
+          }
+        } else {
+          // Plain message in a draw_guess room mid-round is treated as a guess.
+          // Returns "pass" in normal rooms / outside the drawing phase.
+          const verdict = await handleChatMessage(
+            roomId,
+            socketUser.id,
+            socketUser.username,
+            finalContent
+          );
+          if (verdict === "drawer_blocked") {
+            return socket.emit("error", {
+              message: "O desenhista não pode conversar durante a rodada.",
+            });
+          }
+          // Correct guess (word hidden) or a repeated answer: consumed, not broadcast.
+          if (verdict === "correct" || verdict === "suppressed") {
+            return;
           }
         }
 

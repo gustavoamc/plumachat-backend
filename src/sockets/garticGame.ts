@@ -53,6 +53,17 @@ function pickWord(): string {
   return WORD_BANK[Math.floor(Math.random() * WORD_BANK.length)];
 }
 
+// Normalizes a word/guess for comparison: strips accents, trims, lowercases and
+// collapses inner whitespace, so "Avião" / "aviao" / " aviao " all match.
+function normalize(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // strip combining diacritical marks
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
 function clearTimer(game: GarticGame) {
   if (game.timer) {
     clearTimeout(game.timer);
@@ -270,6 +281,52 @@ export async function handlePlayerLeft(roomId: string, userId: string) {
   if (remaining.length < MIN_PLAYERS && game.phase !== "results") {
     await finishGame(roomId);
   }
+}
+
+type ChatVerdict = "pass" | "drawer_blocked" | "correct" | "suppressed";
+
+// Routes a plain chat message through guess-checking when a draw_guess round is
+// live. Returns how the caller (the chat layer) should treat the message:
+//   - "pass"          → not a game guess; broadcast as normal chat
+//   - "drawer_blocked"→ the drawer may not chat during their round; reject
+//   - "correct"       → first correct guess; consumed (don't broadcast the word)
+//   - "suppressed"    → already-correct player repeating the word; drop silently
+// In default rooms (or outside the drawing phase) it always returns "pass".
+export async function handleChatMessage(
+  roomId: string,
+  userId: string,
+  username: string,
+  content: string
+): Promise<ChatVerdict> {
+  const game = games.get(roomId);
+  if (!game || game.phase !== "drawing") return "pass";
+
+  // The drawer can neither chat nor leak the word during their round.
+  if (userId === game.currentDrawerId) return "drawer_blocked";
+
+  const isCorrect =
+    game.word != null && normalize(content) === normalize(game.word);
+
+  // Players who already guessed can keep chatting, but a repeat of the word is
+  // dropped so it doesn't spoil the answer for others still guessing.
+  if (game.guessedThisRound.has(userId)) {
+    return isCorrect ? "suppressed" : "pass";
+  }
+
+  if (!isCorrect) return "pass";
+
+  // First correct guess from this player.
+  game.guessedThisRound.add(userId);
+  // Phase 4 will award points here based on remaining time.
+  getIO().to(roomId).emit("gartic_correct", { roomId, userId, username });
+  await emitGameState(roomId);
+
+  // End the round early once every non-drawer player has guessed.
+  const guessers = game.players.size - 1;
+  if (guessers > 0 && game.guessedThisRound.size >= guessers) {
+    await endRound(roomId);
+  }
+  return "correct";
 }
 
 // Drops a room's game state and its timer. Mirrors evictRoomDrawing; called when
