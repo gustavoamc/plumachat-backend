@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { Role } from "../../shared/types/User";
+import { Role } from "../../shared/types/user";
 
 export const createUserToken = async (
   id: string,
