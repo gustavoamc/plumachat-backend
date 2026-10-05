@@ -14,6 +14,9 @@ import {
 } from "./garticGame";
 import { isBanActive } from "../helpers/banStatus";
 
+// Upper bound for a single chat message, to keep the DB and payloads sane.
+const MAX_MESSAGE_LEN = 2000;
+
 let io: Server;
 
 interface SocketUser {
@@ -104,12 +107,19 @@ export const initIO = (server: any) => {
 
     // Leave a specific room (closed the chat view)
     socket.on("leave_room", async (roomId: string) => {
-      emitSystemMessage(roomId, socketUser.username, "desconectou");
-      socket.leave(roomId);
-      await handlePlayerLeft(roomId, socketUser.id);
-      const remaining = await emitPresence(roomId);
-      await evictDrawingIfEmpty(roomId, remaining);
-      console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
+      // Ignore rooms this socket isn't in, so nobody can spam "desconectou"
+      // notices (persisted to the DB) into arbitrary rooms.
+      if (!socket.rooms.has(roomId)) return;
+      try {
+        socket.leave(roomId);
+        emitSystemMessage(roomId, socketUser.username, "desconectou");
+        await handlePlayerLeft(roomId, socketUser.id);
+        const remaining = await emitPresence(roomId);
+        await evictDrawingIfEmpty(roomId, remaining);
+        console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
+      } catch (err) {
+        console.error("Erro ao sair da sala:", err);
+      }
     });
 
     // send a message to a specific room
@@ -121,6 +131,12 @@ export const initIO = (server: any) => {
 
         if (!socket.rooms.has(roomId)) {
           return socket.emit("error", { message: "Você não está nesta sala." });
+        }
+
+        if (content.length > MAX_MESSAGE_LEN) {
+          return socket.emit("error", {
+            message: `Mensagem muito longa (máx. ${MAX_MESSAGE_LEN} caracteres).`,
+          });
         }
 
         let finalContent = content.trim();
