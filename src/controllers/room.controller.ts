@@ -3,7 +3,7 @@ import { getUserByToken } from "../helpers/getUserByToken";
 import { RoomModel } from "../models/room.model";
 import { UserModel } from "../models/user.model";
 import { MessageModel } from "../models/message.model";
-import { getIO, emitSystemMessage } from "../sockets/setupSocket";
+import { emitSystemMessage, removeUserFromSocketRoom, closeSocketRoom } from "../sockets/setupSocket";
 import { deleteRoomDrawing } from "../sockets/drawing";
 import { evictGarticGame } from "../sockets/garticGame";
 import { RoomType } from "../../shared/types/room";
@@ -164,6 +164,8 @@ export const deleteRoom = async (req: Request, res: Response) => {
     }
 
     await room.deleteOne();
+    // Kick everyone still connected to the room before tearing its state down.
+    await closeSocketRoom(id);
     // Cascade: drop the room's chat history and shared canvas (DB + in-memory)
     // so deleting a room doesn't leave orphaned data behind.
     await Promise.all([
@@ -237,6 +239,7 @@ export const leaveRoom = async (req: Request, res: Response) => {
     );
     await room.save();
 
+    await removeUserFromSocketRoom(id, user.id);
     emitSystemMessage(id, user.username, "saiu");
 
     return res.status(200).json({ message: "Você saiu da sala:", room });
@@ -297,9 +300,10 @@ export const removeParticipant = async (req: Request, res: Response) => {
     );
     await room.save();
 
-    // Notify clients in the room so the removed user is kicked out live
+    // Notify clients in the room so the removed user is kicked out live, and
+    // detach their sockets so they can no longer read or post in the room.
     try {
-      getIO().to(roomId).emit("participant_removed", { roomId, userId });
+      await removeUserFromSocketRoom(roomId, userId, true);
       const removedUser = await UserModel.findById(userId);
       emitSystemMessage(roomId, removedUser?.username ?? "Usuário", "removido");
     } catch {

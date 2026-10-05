@@ -312,6 +312,34 @@ export const emitSystemMessage = async (roomId: string, username: string, action
   }
 };
 
+// Detaches every socket of `userId` from a room (after they left it or were
+// removed via HTTP), so they stop receiving and can no longer post there.
+// With `notifyRemoved`, the room is told first so the removed client can react.
+export const removeUserFromSocketRoom = async (
+  roomId: string,
+  userId: string,
+  notifyRemoved = false
+) => {
+  if (!io) return;
+  if (notifyRemoved) {
+    io.to(roomId).emit("participant_removed", { roomId, userId });
+  }
+  const sockets = await io.in(roomId).fetchSockets();
+  const userSockets = sockets.filter((s) => s.data?.user?.id === userId);
+  if (userSockets.length === 0) return;
+  userSockets.forEach((s) => s.leave(roomId));
+  await handlePlayerLeft(roomId, userId);
+  const remaining = await emitPresence(roomId);
+  await evictDrawingIfEmpty(roomId, remaining);
+};
+
+// Tells everyone in a deleted room and detaches all of their sockets.
+export const closeSocketRoom = async (roomId: string) => {
+  if (!io) return;
+  io.to(roomId).emit("room_deleted", { roomId });
+  io.in(roomId).socketsLeave(roomId);
+};
+
 // Force-disconnects all live sockets of a user (e.g. right after a ban).
 export const disconnectUserSockets = async (userId: string) => {
   if (!io) return;
