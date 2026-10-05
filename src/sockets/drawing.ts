@@ -216,7 +216,9 @@ function canDraw(entry: RoomDrawing, userId: string): boolean {
 // Sets (or clears, with null) the single user allowed to draw while a draw_guess
 // round is in progress. Called by the gartic game module at round start/end.
 export async function setGameDrawer(roomId: string, drawerId: string | null) {
-  const entry = await loadRoom(roomId);
+  // Clearing the lock must not reload a room that was just evicted (that would
+  // re-cache it and leak the entry); an unloaded room has no lock to clear.
+  const entry = drawerId === null ? rooms.get(roomId) : await loadRoom(roomId);
   if (!entry) return;
   entry.gameDrawerId = drawerId;
 }
