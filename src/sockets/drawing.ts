@@ -338,8 +338,8 @@ export function registerDrawingHandlers(socket: Socket) {
       if (!shape) return;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
-      shape.x = Number(x);
-      shape.y = Number(y);
+      shape.x = clampCoord(x);
+      shape.y = clampCoord(y);
       socket.to(roomId).emit("draw_move", { roomId, id, x: shape.x, y: shape.y });
       scheduleSave(roomId);
     }
