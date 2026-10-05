@@ -234,6 +234,14 @@ export const leaveRoom = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Você não está nesta sala." });
     }
 
+    // The owner can't abandon the room (nobody could manage it afterwards);
+    // they should delete it instead.
+    if (room.owner.toString() === user.id) {
+      return res
+        .status(400)
+        .json({ message: "O dono não pode sair da sala. Delete a sala em vez disso." });
+    }
+
     room.participants = room.participants.filter(
       (participant) => participant.toString() !== user.id
     );
