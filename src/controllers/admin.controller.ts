@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { getUserByToken } from "../helpers/getUserByToken";
 import { UserModel } from "../models/user.model";
+import { disconnectUserSockets } from "../sockets/setupSocket";
 
 /**
  * Promotes a user to admin role by a root user
@@ -103,12 +104,15 @@ export const banUser = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Não foi possível banir esse usuário." });
         }
 
-        console.log(banReason, banUntil);
         userToBan.isBanned = true;
         userToBan.banReason = banReason;
         userToBan.banUntil = banUntil;
 
         await userToBan.save();
+
+        // Drop any live socket sessions so the ban takes effect immediately
+        // (the socket auth middleware rejects their reconnect).
+        await disconnectUserSockets(userToBan.id);
 
         return res.status(200).json({ message: "Usuário banido com sucesso." });
 

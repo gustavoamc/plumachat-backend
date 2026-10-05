@@ -12,6 +12,7 @@ import {
   handleChatMessage,
   isRoundLive,
 } from "./garticGame";
+import { isBanActive } from "../helpers/banStatus";
 
 let io: Server;
 
@@ -43,7 +44,7 @@ export const initIO = (server: any) => {
       if (!user) {
         return next(new Error("Usuário não encontrado"));
       }
-      if (user.isBanned) {
+      if (await isBanActive(user)) {
         return next(new Error("Usuário banido"));
       }
 
@@ -309,6 +310,15 @@ export const emitSystemMessage = async (roomId: string, username: string, action
   } catch (err) {
     console.error("Erro ao salvar mensagem de sistema:", err);
   }
+};
+
+// Force-disconnects all live sockets of a user (e.g. right after a ban).
+export const disconnectUserSockets = async (userId: string) => {
+  if (!io) return;
+  const sockets = await io.fetchSockets();
+  sockets
+    .filter((s) => s.data?.user?.id === userId)
+    .forEach((s) => s.disconnect(true));
 };
 
 export const getIO = (): Server => {
