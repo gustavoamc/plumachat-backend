@@ -139,6 +139,11 @@ export const editRoom = async (req: Request, res: Response) => {
     }
 
     await room.save();
+    // Populate like getRoom so clients can keep rendering owner/participant names.
+    await room.populate([
+      { path: "owner", select: "username" },
+      { path: "participants", select: "username" },
+    ]);
     return res.status(200).json({ message: "Sala editada com sucesso!", room });
   } catch (error) {
     if (isDuplicateKey(error)) {
