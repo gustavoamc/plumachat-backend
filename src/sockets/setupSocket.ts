@@ -10,6 +10,7 @@ import {
   handlePlayerLeft,
   evictGarticGame,
   handleChatMessage,
+  isRoundLive,
 } from "./garticGame";
 
 let io: Server;
@@ -149,6 +150,13 @@ export const initIO = (server: any) => {
             const message = args.slice(1).join(" ").trim();
             if (!targetUsername || !message) {
               return socket.emit("error", { message: "Uso: /sussurro <usuário> <mensagem>" });
+            }
+            // Whispers would let the drawer (or players who already guessed)
+            // pass the word privately, so they're off while a round is live.
+            if (isRoundLive(roomId)) {
+              return socket.emit("error", {
+                message: "Sussurros estão desativados durante a rodada.",
+              });
             }
 
             const sockets = await io.in(roomId).fetchSockets();
