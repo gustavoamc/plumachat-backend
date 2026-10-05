@@ -213,6 +213,13 @@ function canDraw(entry: RoomDrawing, userId: string): boolean {
   return !entry.drawingOwnerOnly || entry.ownerId === userId;
 }
 
+// Whether the user may draw right now according to the room's live in-memory
+// state, or null when the room isn't loaded (caller falls back to DB rules).
+export function canUserDrawLive(roomId: string, userId: string): boolean | null {
+  const entry = rooms.get(roomId);
+  return entry ? canDraw(entry, userId) : null;
+}
+
 // Sets (or clears, with null) the single user allowed to draw while a draw_guess
 // round is in progress. Called by the gartic game module at round start/end.
 export async function setGameDrawer(roomId: string, drawerId: string | null) {

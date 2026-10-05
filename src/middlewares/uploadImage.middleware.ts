@@ -4,6 +4,7 @@ import crypto from "crypto";
 import multer from "multer";
 import { getUserByToken } from "../helpers/getUserByToken";
 import { RoomModel } from "../models/room.model";
+import { canUserDrawLive } from "../sockets/drawing";
 import {
   ALLOWED_IMAGE_TYPES,
   MAX_IMAGE_BYTES,
@@ -27,11 +28,19 @@ export async function canUploadToRoom(req: Request, res: Response, next: NextFun
     if (!isParticipant) {
       return res.status(403).json({ message: "Você não está nesta sala." });
     }
-    if (room.drawingOwnerOnly && room.owner.toString() !== user.id) {
-      return res.status(403).json({ message: "Apenas o dono pode desenhar nesta sala." });
+    // Prefer the live in-memory rules (they include an active draw_guess round's
+    // drawer lock); fall back to the persisted owner-only toggle.
+    const live = canUserDrawLive(room.id, user.id);
+    const allowed =
+      live ?? (!room.drawingOwnerOnly || room.owner.toString() === user.id);
+    if (!allowed) {
+      return res.status(403).json({ message: "Você não pode desenhar nesta sala agora." });
     }
     next();
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.name === "CastError") {
+      return res.status(404).json({ message: "Sala não encontrada." });
+    }
     return res.status(401).json({ message: "Token inválido." });
   }
 }
