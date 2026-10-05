@@ -6,6 +6,7 @@ import { MessageModel } from "../models/message.model";
 import { registerDrawingHandlers, sendDrawState, evictRoomDrawing } from "./drawing";
 import {
   registerGarticHandlers,
+  handlePlayerJoined,
   handlePlayerLeft,
   evictGarticGame,
   handleChatMessage,
@@ -91,6 +92,8 @@ export const initIO = (server: any) => {
         await emitPresence(roomId);
         // Send the current canvas snapshot to the joining client.
         await sendDrawState(socket, roomId);
+        // Put late joiners on an in-progress game's scoreboard.
+        await handlePlayerJoined(roomId, socketUser.id, socketUser.username);
         console.log(`Usuário ${socketUser.username} entrou na sala ${roomId}`);
       } catch (err) {
         socket.emit("error", { message: "Erro ao entrar na sala." });
@@ -221,11 +224,16 @@ export const initIO = (server: any) => {
     socket.on("disconnecting", async () => {
       const rooms = [...socket.rooms].filter((roomId) => roomId !== socket.id);
       for (const roomId of rooms) {
-        emitSystemMessage(roomId, socketUser.username, "desconectou");
-        await handlePlayerLeft(roomId, socketUser.id);
-        // Recompute presence excluding this disconnecting socket
-        const remaining = await emitPresence(roomId, socket.id);
-        await evictDrawingIfEmpty(roomId, remaining);
+        try {
+          emitSystemMessage(roomId, socketUser.username, "desconectou");
+          // This socket is still in the room during "disconnecting"; exclude it
+          // from the game's and presence's head counts.
+          await handlePlayerLeft(roomId, socketUser.id, socket.id);
+          const remaining = await emitPresence(roomId, socket.id);
+          await evictDrawingIfEmpty(roomId, remaining);
+        } catch (err) {
+          console.error("Erro ao desconectar da sala:", err);
+        }
       }
     });
 
