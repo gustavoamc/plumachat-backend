@@ -8,6 +8,9 @@ import { deleteRoomDrawing } from "../sockets/drawing";
 import { evictGarticGame } from "../sockets/garticGame";
 import { RoomType } from "../../shared/types/room";
 
+// Mongo duplicate-key error (room names are unique).
+const isDuplicateKey = (err: any) => err?.code === 11000;
+
 // Room types a client is allowed to create. Kept in sync with the model enum
 // and the shared RoomType union.
 const ROOM_TYPES: RoomType[] = ["default", "draw_guess"];
@@ -46,6 +49,9 @@ export const createRoom = async (req: Request, res: Response) => {
       .status(201)
       .json({ message: "Sala criada com sucesso!", room: newRoom });
   } catch (error) {
+    if (isDuplicateKey(error)) {
+      return res.status(400).json({ message: "Já existe uma sala com esse nome." });
+    }
     return res.status(500).json({ message: "Erro ao criar sala." });
   }
 };
@@ -135,6 +141,9 @@ export const editRoom = async (req: Request, res: Response) => {
     await room.save();
     return res.status(200).json({ message: "Sala editada com sucesso!", room });
   } catch (error) {
+    if (isDuplicateKey(error)) {
+      return res.status(400).json({ message: "Já existe uma sala com esse nome." });
+    }
     return res.status(500).json({ message: "Erro ao editar sala." });
   }
 };
