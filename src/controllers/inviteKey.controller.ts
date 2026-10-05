@@ -68,7 +68,7 @@ export const createInviteKeys = async (req: Request, res: Response) => {
   } catch (err) {
     return res
       .status(500)
-      .json({ message: "Erro ao criar chave(s) de convite.", error: err });
+      .json({ message: "Erro ao criar chave(s) de convite." });
   }
 };
 
@@ -102,7 +102,7 @@ export const getInviteKeys = async (req: Request, res: Response) => {
   } catch (err) {
     return res
       .status(500)
-      .json({ message: "Erro ao buscar chaves de convite.", error: err });
+      .json({ message: "Erro ao buscar chaves de convite." });
   }
 };
 
@@ -140,6 +140,6 @@ export const deleteInviteKey = async (req: Request, res: Response) => {
   } catch (err) {
     return res
       .status(500)
-      .json({ message: "Erro ao remover chave de convite.", error: err });
+      .json({ message: "Erro ao remover chave de convite." });
   }
 };

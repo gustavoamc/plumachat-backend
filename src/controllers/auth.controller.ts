@@ -81,7 +81,7 @@ export const registerUser = async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    return res.status(500).json({ message: "Erro ao registrar", error: err });
+    return res.status(500).json({ message: "Erro ao registrar" });
   }
 };
 
@@ -126,6 +126,6 @@ export const loginUser = async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    return res.status(500).json({ message: "Erro ao logar", error: err });
+    return res.status(500).json({ message: "Erro ao logar" });
   }
 };
