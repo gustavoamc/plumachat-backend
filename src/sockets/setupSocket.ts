@@ -6,10 +6,16 @@ import { MessageModel } from "../models/message.model";
 import { registerDrawingHandlers, sendDrawState, evictRoomDrawing } from "./drawing";
 import {
   registerGarticHandlers,
+  handlePlayerJoined,
   handlePlayerLeft,
   evictGarticGame,
   handleChatMessage,
+  isRoundLive,
 } from "./garticGame";
+import { isBanActive } from "../helpers/banStatus";
+
+// Upper bound for a single chat message, to keep the DB and payloads sane.
+const MAX_MESSAGE_LEN = 2000;
 
 let io: Server;
 
@@ -41,7 +47,7 @@ export const initIO = (server: any) => {
       if (!user) {
         return next(new Error("Usuário não encontrado"));
       }
-      if (user.isBanned) {
+      if (await isBanActive(user)) {
         return next(new Error("Usuário banido"));
       }
 
@@ -91,6 +97,8 @@ export const initIO = (server: any) => {
         await emitPresence(roomId);
         // Send the current canvas snapshot to the joining client.
         await sendDrawState(socket, roomId);
+        // Put late joiners on an in-progress game's scoreboard.
+        await handlePlayerJoined(roomId, socketUser.id, socketUser.username);
         console.log(`Usuário ${socketUser.username} entrou na sala ${roomId}`);
       } catch (err) {
         socket.emit("error", { message: "Erro ao entrar na sala." });
@@ -99,12 +107,19 @@ export const initIO = (server: any) => {
 
     // Leave a specific room (closed the chat view)
     socket.on("leave_room", async (roomId: string) => {
-      emitSystemMessage(roomId, socketUser.username, "desconectou");
-      socket.leave(roomId);
-      await handlePlayerLeft(roomId, socketUser.id);
-      const remaining = await emitPresence(roomId);
-      await evictDrawingIfEmpty(roomId, remaining);
-      console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
+      // Ignore rooms this socket isn't in, so nobody can spam "desconectou"
+      // notices (persisted to the DB) into arbitrary rooms.
+      if (!socket.rooms.has(roomId)) return;
+      try {
+        socket.leave(roomId);
+        emitSystemMessage(roomId, socketUser.username, "desconectou");
+        await handlePlayerLeft(roomId, socketUser.id);
+        const remaining = await emitPresence(roomId);
+        await evictDrawingIfEmpty(roomId, remaining);
+        console.log(`Usuário ${socketUser.username} saiu da sala ${roomId}`);
+      } catch (err) {
+        console.error("Erro ao sair da sala:", err);
+      }
     });
 
     // send a message to a specific room
@@ -116,6 +131,12 @@ export const initIO = (server: any) => {
 
         if (!socket.rooms.has(roomId)) {
           return socket.emit("error", { message: "Você não está nesta sala." });
+        }
+
+        if (content.length > MAX_MESSAGE_LEN) {
+          return socket.emit("error", {
+            message: `Mensagem muito longa (máx. ${MAX_MESSAGE_LEN} caracteres).`,
+          });
         }
 
         let finalContent = content.trim();
@@ -146,6 +167,13 @@ export const initIO = (server: any) => {
             const message = args.slice(1).join(" ").trim();
             if (!targetUsername || !message) {
               return socket.emit("error", { message: "Uso: /sussurro <usuário> <mensagem>" });
+            }
+            // Whispers would let the drawer (or players who already guessed)
+            // pass the word privately, so they're off while a round is live.
+            if (isRoundLive(roomId)) {
+              return socket.emit("error", {
+                message: "Sussurros estão desativados durante a rodada.",
+              });
             }
 
             const sockets = await io.in(roomId).fetchSockets();
@@ -221,11 +249,16 @@ export const initIO = (server: any) => {
     socket.on("disconnecting", async () => {
       const rooms = [...socket.rooms].filter((roomId) => roomId !== socket.id);
       for (const roomId of rooms) {
-        emitSystemMessage(roomId, socketUser.username, "desconectou");
-        await handlePlayerLeft(roomId, socketUser.id);
-        // Recompute presence excluding this disconnecting socket
-        const remaining = await emitPresence(roomId, socket.id);
-        await evictDrawingIfEmpty(roomId, remaining);
+        try {
+          emitSystemMessage(roomId, socketUser.username, "desconectou");
+          // This socket is still in the room during "disconnecting"; exclude it
+          // from the game's and presence's head counts.
+          await handlePlayerLeft(roomId, socketUser.id, socket.id);
+          const remaining = await emitPresence(roomId, socket.id);
+          await evictDrawingIfEmpty(roomId, remaining);
+        } catch (err) {
+          console.error("Erro ao desconectar da sala:", err);
+        }
       }
     });
 
@@ -293,6 +326,43 @@ export const emitSystemMessage = async (roomId: string, username: string, action
   } catch (err) {
     console.error("Erro ao salvar mensagem de sistema:", err);
   }
+};
+
+// Detaches every socket of `userId` from a room (after they left it or were
+// removed via HTTP), so they stop receiving and can no longer post there.
+// With `notifyRemoved`, the room is told first so the removed client can react.
+export const removeUserFromSocketRoom = async (
+  roomId: string,
+  userId: string,
+  notifyRemoved = false
+) => {
+  if (!io) return;
+  if (notifyRemoved) {
+    io.to(roomId).emit("participant_removed", { roomId, userId });
+  }
+  const sockets = await io.in(roomId).fetchSockets();
+  const userSockets = sockets.filter((s) => s.data?.user?.id === userId);
+  if (userSockets.length === 0) return;
+  userSockets.forEach((s) => s.leave(roomId));
+  await handlePlayerLeft(roomId, userId);
+  const remaining = await emitPresence(roomId);
+  await evictDrawingIfEmpty(roomId, remaining);
+};
+
+// Tells everyone in a deleted room and detaches all of their sockets.
+export const closeSocketRoom = async (roomId: string) => {
+  if (!io) return;
+  io.to(roomId).emit("room_deleted", { roomId });
+  io.in(roomId).socketsLeave(roomId);
+};
+
+// Force-disconnects all live sockets of a user (e.g. right after a ban).
+export const disconnectUserSockets = async (userId: string) => {
+  if (!io) return;
+  const sockets = await io.fetchSockets();
+  sockets
+    .filter((s) => s.data?.user?.id === userId)
+    .forEach((s) => s.disconnect(true));
 };
 
 export const getIO = (): Server => {

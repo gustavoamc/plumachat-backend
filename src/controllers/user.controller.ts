@@ -93,6 +93,10 @@ export const changePassword = async (req: Request, res: Response) => {
   const decodedPayload = verifyToken(req);
   const { currentPassword, newPassword } = req.body;
 
+  if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+    return res.status(400).json({ message: "Todos os campos são obrigatórios." });
+  }
+
   try {
     const user = await UserModel.findById(decodedPayload?.id).select(
       "+password"
@@ -101,8 +105,9 @@ export const changePassword = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Usuário não encontrado" });
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
+    // 400, not 401: the client treats 401 as an expired session and logs out.
     if (!isMatch)
-      return res.status(401).json({ message: "Senha atual incorreta" });
+      return res.status(400).json({ message: "Senha atual incorreta" });
 
     // maintains password minnimum length
     if (newPassword.length < 8) {
@@ -120,7 +125,7 @@ export const changePassword = async (req: Request, res: Response) => {
 
     return res.status(200).json({ message: "Senha alterada com sucesso" });
   } catch (error) {
-    return res.status(500).json({ message: "Erro ao trocar senha", error });
+    return res.status(500).json({ message: "Erro ao trocar senha" });
   }
 };
 

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { getUserByToken } from "../helpers/getUserByToken";
 import { UserModel } from "../models/user.model";
+import { disconnectUserSockets } from "../sockets/setupSocket";
 
 /**
  * Promotes a user to admin role by a root user
@@ -33,7 +34,7 @@ export const promoteAdmin = async (req: Request, res: Response) => {
 
         return res.status(200).json({ message: "Usuário promovido a administrador." });
     } catch (err) {
-        return res.status(500).json({ message: "Erro ao promover o usuário.", error: err });
+        return res.status(500).json({ message: "Erro ao promover o usuário." });
     }
 }
 
@@ -68,7 +69,7 @@ export const demoteAdmin = async (req: Request, res: Response) => {
 
         return res.status(200).json({ message: "Usuário rebaixado de administrador." });
     } catch (err) {
-        return res.status(500).json({ message: "Erro ao rebaixar o usuário.", error: err });
+        return res.status(500).json({ message: "Erro ao rebaixar o usuário." });
     }
 }
 
@@ -103,17 +104,20 @@ export const banUser = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Não foi possível banir esse usuário." });
         }
 
-        console.log(banReason, banUntil);
         userToBan.isBanned = true;
         userToBan.banReason = banReason;
         userToBan.banUntil = banUntil;
 
         await userToBan.save();
 
+        // Drop any live socket sessions so the ban takes effect immediately
+        // (the socket auth middleware rejects their reconnect).
+        await disconnectUserSockets(userToBan.id);
+
         return res.status(200).json({ message: "Usuário banido com sucesso." });
 
     } catch (error) {
-        return res.status(500).json({ message: "Erro ao banir o usuário.", error: error });
+        return res.status(500).json({ message: "Erro ao banir o usuário." });
     }
 }
 
@@ -161,7 +165,7 @@ export const unbanUser = async (req: Request, res: Response) => {
     return res.status(200).json({ message: "Usuário desbanido com sucesso." });
 
   } catch (error) {
-    return res.status(500).json({ message: "Erro ao desbanir o usuário.", error });
+    return res.status(500).json({ message: "Erro ao desbanir o usuário." });
   }
 };
 
@@ -207,7 +211,7 @@ export const getAllUsers = async (req: Request, res: Response) => {
 
         return res.status(200).json(users);
     } catch (error) {
-        return res.status(500).json({ message: "Erro ao buscar usuários.", error });
+        return res.status(500).json({ message: "Erro ao buscar usuários." });
     }
 }
 

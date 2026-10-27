@@ -81,7 +81,7 @@ export const registerUser = async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    return res.status(500).json({ message: "Erro ao registrar", error: err });
+    return res.status(500).json({ message: "Erro ao registrar" });
   }
 };
 
@@ -104,10 +104,10 @@ export const loginUser = async (req: Request, res: Response) => {
 
     const user = await UserModel.findOne({ email }).select("+password");
     if (!user)
-      return res.status(400).json({ message: "Usuário não encontrado." });
+      return res.status(400).json({ message: "Email ou senha incorretos." });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: "Senha incorreta." });
+    if (!isMatch) return res.status(400).json({ message: "Email ou senha incorretos." });
 
     //NOTED BEHAVIOUR
     // console.log(user._id); new ObjectId("683b4408773b84b76fbeeb77") //literal
@@ -126,6 +126,6 @@ export const loginUser = async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    return res.status(500).json({ message: "Erro ao logar", error: err });
+    return res.status(500).json({ message: "Erro ao logar" });
   }
 };

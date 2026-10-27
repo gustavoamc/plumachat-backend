@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { getUserByToken } from "../helpers/getUserByToken";
+import { isBanActive } from "../helpers/banStatus";
 
 /**
  * Middleware to check user status and authorization
@@ -23,7 +24,7 @@ export function checkStatus(allowedRoles: ("user" | "admin" | "root")[]) {
     //   req.user = user as unknown as User; //OR body.user = user;
 
       // Verify ban status
-      if (user.isBanned) {
+      if (await isBanActive(user)) {
         return res.status(403).json({ message: "Usuário banido. Motivo: " + user.banReason });
       }
 

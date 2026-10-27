@@ -7,9 +7,11 @@ const router = require('express').Router()
 
 // Basic hygiene against invite-code scanning / brute force on registration.
 const registerLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
+// Password brute-force protection on login.
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 
 router.post('/register', registerLimiter, registerUser)
-router.post('/login', loginUser)
+router.post('/login', loginLimiter, loginUser)
 //TODO: reset password
 
 export default router

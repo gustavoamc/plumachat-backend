@@ -213,10 +213,19 @@ function canDraw(entry: RoomDrawing, userId: string): boolean {
   return !entry.drawingOwnerOnly || entry.ownerId === userId;
 }
 
+// Whether the user may draw right now according to the room's live in-memory
+// state, or null when the room isn't loaded (caller falls back to DB rules).
+export function canUserDrawLive(roomId: string, userId: string): boolean | null {
+  const entry = rooms.get(roomId);
+  return entry ? canDraw(entry, userId) : null;
+}
+
 // Sets (or clears, with null) the single user allowed to draw while a draw_guess
 // round is in progress. Called by the gartic game module at round start/end.
 export async function setGameDrawer(roomId: string, drawerId: string | null) {
-  const entry = await loadRoom(roomId);
+  // Clearing the lock must not reload a room that was just evicted (that would
+  // re-cache it and leak the entry); an unloaded room has no lock to clear.
+  const entry = drawerId === null ? rooms.get(roomId) : await loadRoom(roomId);
   if (!entry) return;
   entry.gameDrawerId = drawerId;
 }
@@ -292,13 +301,24 @@ export async function sendDrawState(socket: Socket, roomId: string) {
 export function registerDrawingHandlers(socket: Socket) {
   const user = socket.data.user as SocketUser;
 
+  // Registers an async handler whose failures (e.g. a DB error) are logged
+  // instead of becoming unhandled rejections that would crash the process.
+  const on = (event: string, handler: (...args: any[]) => Promise<void>) =>
+    socket.on(event, async (...args: any[]) => {
+      try {
+        await handler(...args);
+      } catch (err) {
+        console.error(`Erro no evento ${event}:`, err);
+      }
+    });
+
   // Client (re)requests the current board, e.g. when opening the whiteboard panel.
-  socket.on("draw_request_state", async (roomId: string) => {
+  on("draw_request_state", async (roomId: string) => {
     await sendDrawState(socket, roomId);
   });
 
   // A completed stroke. We send the full (small) shape once, on pointer-up.
-  socket.on("draw_add", async ({ roomId, shape }: { roomId: string; shape: any }) => {
+  on("draw_add", async ({ roomId, shape }: { roomId: string; shape: any }) => {
     if (!socket.rooms.has(roomId)) return;
     const entry = await loadRoom(roomId);
     if (!entry || !canDraw(entry, user.id)) return;
@@ -314,7 +334,7 @@ export function registerDrawingHandlers(socket: Socket) {
 
   // Live drag of an existing stroke. Throttled by the client; we forward only the
   // minimal { id, x, y } to everyone else. Sender is excluded (it already moved).
-  socket.on(
+  on(
     "draw_move",
     async ({ roomId, id, x, y }: { roomId: string; id: string; x: number; y: number }) => {
       if (!socket.rooms.has(roomId)) return;
@@ -325,8 +345,8 @@ export function registerDrawingHandlers(socket: Socket) {
       if (!shape) return;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
-      shape.x = Number(x);
-      shape.y = Number(y);
+      shape.x = clampCoord(x);
+      shape.y = clampCoord(y);
       socket.to(roomId).emit("draw_move", { roomId, id, x: shape.x, y: shape.y });
       scheduleSave(roomId);
     }
@@ -336,7 +356,7 @@ export function registerDrawingHandlers(socket: Socket) {
   // The client sends the full (small) shape; we re-sanitize, force its original
   // `type` (no type changes via update) and rebroadcast. Used at transform-end /
   // text-commit, so it's low-frequency unlike the throttled drag stream.
-  socket.on("draw_update", async ({ roomId, shape }: { roomId: string; shape: any }) => {
+  on("draw_update", async ({ roomId, shape }: { roomId: string; shape: any }) => {
     if (!socket.rooms.has(roomId)) return;
     const entry = await loadRoom(roomId);
     if (!entry || !canDraw(entry, user.id)) return;
@@ -353,7 +373,7 @@ export function registerDrawingHandlers(socket: Socket) {
     scheduleSave(roomId);
   });
 
-  socket.on("draw_remove", async ({ roomId, id }: { roomId: string; id: string }) => {
+  on("draw_remove", async ({ roomId, id }: { roomId: string; id: string }) => {
     if (!socket.rooms.has(roomId)) return;
     const entry = await loadRoom(roomId);
     if (!entry || !canDraw(entry, user.id)) return;
@@ -363,7 +383,7 @@ export function registerDrawingHandlers(socket: Socket) {
     scheduleSave(roomId);
   });
 
-  socket.on("draw_clear", async ({ roomId }: { roomId: string }) => {
+  on("draw_clear", async ({ roomId }: { roomId: string }) => {
     if (!socket.rooms.has(roomId)) return;
     const entry = await loadRoom(roomId);
     if (!entry || !canDraw(entry, user.id)) return;
@@ -376,7 +396,7 @@ export function registerDrawingHandlers(socket: Socket) {
   // Owner-only board settings: the "owner-only drawing" beta toggle and the
   // shared canvas size. Provided fields are applied, persisted, and broadcast so
   // every client re-evaluates its draw permission / resizes its board in sync.
-  socket.on(
+  on(
     "draw_settings",
     async ({
       roomId,

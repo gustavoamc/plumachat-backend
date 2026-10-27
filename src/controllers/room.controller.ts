@@ -3,10 +3,13 @@ import { getUserByToken } from "../helpers/getUserByToken";
 import { RoomModel } from "../models/room.model";
 import { UserModel } from "../models/user.model";
 import { MessageModel } from "../models/message.model";
-import { getIO, emitSystemMessage } from "../sockets/setupSocket";
+import { emitSystemMessage, removeUserFromSocketRoom, closeSocketRoom } from "../sockets/setupSocket";
 import { deleteRoomDrawing } from "../sockets/drawing";
 import { evictGarticGame } from "../sockets/garticGame";
 import { RoomType } from "../../shared/types/room";
+
+// Mongo duplicate-key error (room names are unique).
+const isDuplicateKey = (err: any) => err?.code === 11000;
 
 // Room types a client is allowed to create. Kept in sync with the model enum
 // and the shared RoomType union.
@@ -46,6 +49,9 @@ export const createRoom = async (req: Request, res: Response) => {
       .status(201)
       .json({ message: "Sala criada com sucesso!", room: newRoom });
   } catch (error) {
+    if (isDuplicateKey(error)) {
+      return res.status(400).json({ message: "Já existe uma sala com esse nome." });
+    }
     return res.status(500).json({ message: "Erro ao criar sala." });
   }
 };
@@ -133,8 +139,16 @@ export const editRoom = async (req: Request, res: Response) => {
     }
 
     await room.save();
+    // Populate like getRoom so clients can keep rendering owner/participant names.
+    await room.populate([
+      { path: "owner", select: "username" },
+      { path: "participants", select: "username" },
+    ]);
     return res.status(200).json({ message: "Sala editada com sucesso!", room });
   } catch (error) {
+    if (isDuplicateKey(error)) {
+      return res.status(400).json({ message: "Já existe uma sala com esse nome." });
+    }
     return res.status(500).json({ message: "Erro ao editar sala." });
   }
 };
@@ -164,6 +178,8 @@ export const deleteRoom = async (req: Request, res: Response) => {
     }
 
     await room.deleteOne();
+    // Kick everyone still connected to the room before tearing its state down.
+    await closeSocketRoom(id);
     // Cascade: drop the room's chat history and shared canvas (DB + in-memory)
     // so deleting a room doesn't leave orphaned data behind.
     await Promise.all([
@@ -232,11 +248,20 @@ export const leaveRoom = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Você não está nesta sala." });
     }
 
+    // The owner can't abandon the room (nobody could manage it afterwards);
+    // they should delete it instead.
+    if (room.owner.toString() === user.id) {
+      return res
+        .status(400)
+        .json({ message: "O dono não pode sair da sala. Delete a sala em vez disso." });
+    }
+
     room.participants = room.participants.filter(
       (participant) => participant.toString() !== user.id
     );
     await room.save();
 
+    await removeUserFromSocketRoom(id, user.id);
     emitSystemMessage(id, user.username, "saiu");
 
     return res.status(200).json({ message: "Você saiu da sala:", room });
@@ -297,9 +322,10 @@ export const removeParticipant = async (req: Request, res: Response) => {
     );
     await room.save();
 
-    // Notify clients in the room so the removed user is kicked out live
+    // Notify clients in the room so the removed user is kicked out live, and
+    // detach their sockets so they can no longer read or post in the room.
     try {
-      getIO().to(roomId).emit("participant_removed", { roomId, userId });
+      await removeUserFromSocketRoom(roomId, userId, true);
       const removedUser = await UserModel.findById(userId);
       emitSystemMessage(roomId, removedUser?.username ?? "Usuário", "removido");
     } catch {
